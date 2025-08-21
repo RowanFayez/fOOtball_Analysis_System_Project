@@ -4,7 +4,17 @@ import numpy as np
 from utils import frames_to_video_bytes, process_video
 from trackers import Tracker
 from TeamAssigner import TeamAssigner
+import importlib.util
+import pathlib
 
+# Helper to load a class from a file path (works even if package names are unusual)
+root = pathlib.Path(__file__).resolve().parent
+
+def _load_class_from_path(path: pathlib.Path, class_name: str):
+    spec = importlib.util.spec_from_file_location(path.stem, str(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return getattr(module, class_name)
 
 @st.cache_resource
 def load_tracker(model_path):
@@ -25,6 +35,32 @@ def load_team_assigner():
     except Exception as e:
         st.error(f"Error initializing TeamAssigner: {str(e)}")
         return None
+
+@st.cache_resource
+def load_player_ball_assigner():
+    player_path = root / "player_ball_assigner.dart" / "player_ball_assigner.py"
+    PlayerBallAssigner = _load_class_from_path(player_path, "PlayerBallAssigner")
+    return PlayerBallAssigner()
+
+@st.cache_resource
+def load_camera_movement_estimator(first_frame):
+    # module file path inside the project
+    cam_path = root / "camera_movement_estimator.py" / "camera_movement_estimator.py"
+    CameraMovementEstimator = _load_class_from_path(cam_path, "CameraMovementEstimator")
+    return CameraMovementEstimator(first_frame)
+
+@st.cache_resource
+def load_view_transformer():
+    view_path = root / "view_transformer" / "view_transformers.py"
+    ViewTransformer = _load_class_from_path(view_path, "ViewTransformer")
+    return ViewTransformer()
+
+@st.cache_resource
+def load_speed_and_distance_estimator():
+    speed_path = root / "speed_and_distance_estimator.py" / "speed_and_distance_estimator.py"
+    # The class may be named SpeedAndDistanceEstimator
+    SpeedClass = _load_class_from_path(speed_path, "SpeedAndDistanceEstimator")
+    return SpeedClass()
 
 
 def add_theme():
@@ -149,6 +185,26 @@ def main():
         st.error("❌ Failed to initialize TeamAssigner")
         st.stop()
 
+    ball_assigner = load_player_ball_assigner()
+    if ball_assigner is None:
+        st.error("❌ Failed to initialize PlayerBallAssigner")
+        st.stop()
+
+    camera_movement_estimator = load_camera_movement_estimator()
+    if camera_movement_estimator is None:
+        st.error("❌ Failed to initialize CameraMovementEstimator")
+        st.stop()
+
+    view_transformer = load_view_transformer()
+    if view_transformer is None:
+        st.error("❌ Failed to initialize ViewTransformer")
+        st.stop()
+
+    speed_and_distance_estimator = load_speed_and_distance_estimator()
+    if speed_and_distance_estimator is None:
+        st.error("❌ Failed to initialize SpeedAndDistanceEstimator")
+        st.stop()
+
     # Sidebar: processing mode selection
     st.sidebar.header("⚡ Processing Mode ⚽")
     mode = st.sidebar.radio(
@@ -185,12 +241,39 @@ def main():
                 uploaded_file, 
                 tracker, 
                 team_assigner,
+                ball_assigner,
+                camera_movement_estimator,
+                view_transformer,
+                speed_and_distance_estimator,
                 max_frames=max_frames,
                 skip_frames=skip_frames,
                 resize_width=resize_width,
                 fast_mode=fast_mode
             )
-                
+            # run post-processing using the newly added modules
+            try:
+                if output_frames:
+                    cam_estimator = load_camera_movement_estimator(output_frames[0])
+                    camera_movement = cam_estimator.get_camera_movement(output_frames, read_from_stub=False, stub_path=None)
+                    cam_estimator.add_adjust_positions_to_tracks(tracks, camera_movement)
+
+                view_transformer = load_view_transformer()
+                view_transformer.add_transformed_position_to_tracks(tracks)
+
+                speed_estimator = load_speed_and_distance_estimator()
+                speed_estimator.add_speed_and_distance_to_tracks(tracks)
+
+                ball_assigner = load_player_ball_assigner()
+                if "ball" in tracks:
+                    for frame_num, ball_frame in enumerate(tracks["ball"]):
+                        for ball_id, ball_info in ball_frame.items():
+                            ball_bbox = ball_info.get("bbox")
+                            if ball_bbox:
+                                assigned = ball_assigner.assign_ball_to_player(tracks.get("players", [{}])[frame_num], ball_bbox)
+                                tracks["ball"][frame_num][ball_id]["assigned_player"] = assigned
+            except Exception as e:
+                st.warning(f"Post-processing skipped due to error: {e}")
+
             st.success("✅ Video analysis completed! 🎉")
             st.info(f"📊 Processed {len(output_frames)} frames")
             
