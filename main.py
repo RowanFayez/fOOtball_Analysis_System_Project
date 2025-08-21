@@ -185,25 +185,7 @@ def main():
         st.error("❌ Failed to initialize TeamAssigner")
         st.stop()
 
-    ball_assigner = load_player_ball_assigner()
-    if ball_assigner is None:
-        st.error("❌ Failed to initialize PlayerBallAssigner")
-        st.stop()
-
-    camera_movement_estimator = load_camera_movement_estimator()
-    if camera_movement_estimator is None:
-        st.error("❌ Failed to initialize CameraMovementEstimator")
-        st.stop()
-
-    view_transformer = load_view_transformer()
-    if view_transformer is None:
-        st.error("❌ Failed to initialize ViewTransformer")
-        st.stop()
-
-    speed_and_distance_estimator = load_speed_and_distance_estimator()
-    if speed_and_distance_estimator is None:
-        st.error("❌ Failed to initialize SpeedAndDistanceEstimator")
-        st.stop()
+    # Defer loading of other processing components until after frames are available
 
     # Sidebar: processing mode selection
     st.sidebar.header("⚡ Processing Mode ⚽")
@@ -238,13 +220,9 @@ def main():
             uploaded_file.seek(0)  # Reset file pointer
 
             output_frames, tracks = process_video(
-                uploaded_file, 
-                tracker, 
+                uploaded_file,
+                tracker,
                 team_assigner,
-                ball_assigner,
-                camera_movement_estimator,
-                view_transformer,
-                speed_and_distance_estimator,
                 max_frames=max_frames,
                 skip_frames=skip_frames,
                 resize_width=resize_width,
@@ -253,24 +231,29 @@ def main():
             # run post-processing using the newly added modules
             try:
                 if output_frames:
+                    # Instantiate processing components now that we have frames
                     cam_estimator = load_camera_movement_estimator(output_frames[0])
-                    camera_movement = cam_estimator.get_camera_movement(output_frames, read_from_stub=False, stub_path=None)
+                    camera_movement = cam_estimator.get_camera_movement(
+                        output_frames, read_from_stub=False, stub_path=None
+                    )
                     cam_estimator.add_adjust_positions_to_tracks(tracks, camera_movement)
 
-                view_transformer = load_view_transformer()
-                view_transformer.add_transformed_position_to_tracks(tracks)
+                    view_transformer = load_view_transformer()
+                    view_transformer.add_transformed_position_to_tracks(tracks)
 
-                speed_estimator = load_speed_and_distance_estimator()
-                speed_estimator.add_speed_and_distance_to_tracks(tracks)
+                    speed_estimator = load_speed_and_distance_estimator()
+                    speed_estimator.add_speed_and_distance_to_tracks(tracks)
 
-                ball_assigner = load_player_ball_assigner()
-                if "ball" in tracks:
-                    for frame_num, ball_frame in enumerate(tracks["ball"]):
-                        for ball_id, ball_info in ball_frame.items():
-                            ball_bbox = ball_info.get("bbox")
-                            if ball_bbox:
-                                assigned = ball_assigner.assign_ball_to_player(tracks.get("players", [{}])[frame_num], ball_bbox)
-                                tracks["ball"][frame_num][ball_id]["assigned_player"] = assigned
+                    ball_assigner = load_player_ball_assigner()
+                    if "ball" in tracks:
+                        for frame_num, ball_frame in enumerate(tracks["ball"]):
+                            for ball_id, ball_info in ball_frame.items():
+                                ball_bbox = ball_info.get("bbox")
+                                if ball_bbox:
+                                    assigned = ball_assigner.assign_ball_to_player(
+                                        tracks.get("players", [{}])[frame_num], ball_bbox
+                                    )
+                                    tracks["ball"][frame_num][ball_id]["assigned_player"] = assigned
             except Exception as e:
                 st.warning(f"Post-processing skipped due to error: {e}")
 
