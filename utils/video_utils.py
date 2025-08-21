@@ -1,5 +1,6 @@
 import cv2
 import tempfile
+import numpy as np
 import os
 
 
@@ -82,12 +83,15 @@ def process_video(
     video_file,
     tracker,
     team_assigner,
+    player_ball_assigner,
     max_frames=300,
     skip_frames=2,
     resize_width=640,
     fast_mode=True,
 ):
     """Process a video using cached models and optimizations."""
+    import tempfile, os, numpy as np
+
     tmp_file_path = None
     try:
         # Save uploaded file to temp
@@ -95,7 +99,7 @@ def process_video(
             tmp_file.write(video_file.read())
             tmp_file_path = tmp_file.name
 
-        # Read frames with inline resizing
+        # Read frames
         video_frames = read_video(
             tmp_file_path,
             max_frames=max_frames if fast_mode else None,
@@ -111,46 +115,74 @@ def process_video(
         # Get object tracks
         tracks = tracker.get_object_tracks(video_frames)
 
-        if hasattr(tracker, "add_position_to_tracks"):
-            tracker.add_position_to_tracks(tracks)
+        # Interpolate missing ball positions
+        ball_tracks = tracker.interpolate_ball_positions(tracks["ball"])
+        tracks["ball"] = ball_tracks
 
         # Reset team assigner state
         team_assigner.team_colors = {}
         team_assigner.player_team_dict = {}
 
-        # Team assignment if players exist
-        if "players" in tracks and tracks["players"] and tracks["players"][0]:
-            team_assigner.assign_team_color(video_frames[0], tracks["players"][0])
 
-            frame_step = 3 if fast_mode else 1
 
-            for frame_num in range(0, len(tracks["players"]), frame_step):
-                player_track = tracks["players"][frame_num]
-                for player_id, track in player_track.items():
-                    team = team_assigner.get_player_team(
-                        video_frames[frame_num], track["bbox"], player_id
-                    )
-                    tracks["players"][frame_num][player_id]["team"] = team
-                    tracks["players"][frame_num][player_id]["team_color"] = (
-                        team_assigner.team_colors[team]
-                    )
+        if "players" in tracks and tracks["players"]:
+            first_players = tracks["players"][0]
 
-            # Fill skipped frames in fast mode
-            if fast_mode and frame_step > 1:
-                for frame_num, player_track in enumerate(tracks["players"]):
+            # Assign team colors if players exist
+            if first_players:
+                team_assigner.assign_team_color(video_frames[0], first_players)
+
+                frame_step = 3 if fast_mode else 1
+
+                for frame_num in range(0, len(tracks["players"]), frame_step):
+                    player_track = tracks["players"][frame_num]
                     for player_id, track in player_track.items():
-                        if (
-                            "team" not in track
-                            and player_id in team_assigner.player_team_dict
-                        ):
-                            team = team_assigner.player_team_dict[player_id]
-                            tracks["players"][frame_num][player_id]["team"] = team
-                            tracks["players"][frame_num][player_id]["team_color"] = (
-                                team_assigner.team_colors[team]
-                            )
+                        team = team_assigner.get_player_team(
+                            video_frames[frame_num], track["bbox"], player_id
+                        )
+                        tracks["players"][frame_num][player_id]["team"] = team
+                        tracks["players"][frame_num][player_id]["team_color"] = (
+                            team_assigner.team_colors[team]
+                        )
+
+                # Fill skipped frames in fast mode
+                if fast_mode and frame_step > 1:
+                    for frame_num, player_track in enumerate(tracks["players"]):
+                        for player_id, track in player_track.items():
+                            if (
+                                "team" not in track
+                                and player_id in team_assigner.player_team_dict
+                            ):
+                                team = team_assigner.player_team_dict[player_id]
+                                tracks["players"][frame_num][player_id]["team"] = team
+                                tracks["players"][frame_num][player_id]["team_color"] = (
+                                    team_assigner.team_colors[team]
+                                )
+
+
+            team_ball_control = []
+            # Ball control assignment
+            for frame_num, player_track in enumerate(tracks["players"]):
+                ball_bbox = tracks["ball"][frame_num][1]["bbox"]
+                assigned_player = player_ball_assigner.assign_ball_to_player(
+                    player_track, ball_bbox
+                )
+
+                if assigned_player != -1:
+                    tracks['players'][frame_num][assigned_player]['has_ball'] = True
+                    player_team = tracks['players'][frame_num][assigned_player].get('team', 1)
+                    team_ball_control.append(player_team)
+                else:
+                    team_ball_control.append(team_ball_control[-1] if team_ball_control else 1)
+
+        else:
+            # No players detected → default control to team 1
+            team_ball_control = [1] * len(video_frames)
+
+        team_ball_control = np.array(team_ball_control)
 
         print("Drawing annotations...")
-        output_video_frames = tracker.draw_annotations(video_frames, tracks, None)
+        output_video_frames = tracker.draw_annotations(video_frames, tracks, team_ball_control)
 
         return output_video_frames, tracks
 

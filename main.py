@@ -4,7 +4,7 @@ import numpy as np
 from utils import frames_to_video_bytes, process_video
 from trackers import Tracker
 from TeamAssigner import TeamAssigner
-
+from player_ball_assigner import PlayerBallAssigner
 
 @st.cache_resource
 def load_tracker(model_path):
@@ -25,6 +25,16 @@ def load_team_assigner():
     except Exception as e:
         st.error(f"Error initializing TeamAssigner: {str(e)}")
         return None
+
+
+@st.cache_resource
+def load_player_ball_assigner():
+    try:
+        return PlayerBallAssigner()
+    except Exception as e:
+        st.error(f"Error initializing PlayerBallAssigner: {str(e)}")
+        return None
+
 
 
 def add_theme():
@@ -149,6 +159,8 @@ def main():
         st.error("❌ Failed to initialize TeamAssigner")
         st.stop()
 
+    player_ball_assigner = load_player_ball_assigner()
+
     # Sidebar: processing mode selection
     st.sidebar.header("⚡ Processing Mode ⚽")
     mode = st.sidebar.radio(
@@ -158,11 +170,15 @@ def main():
     )
 
     if mode == "🚀 Fast":
-        max_frames, skip_frames, resize_width, fast_mode = 200, 3, 480, True
+        # Low res for speed
+        max_frames, skip_frames, resize_width, fast_mode = None, 3, 640, True
     elif mode == "⚖️ Balanced":
-        max_frames, skip_frames, resize_width, fast_mode = 400, 2, 640, True
-    else:  
-        max_frames, skip_frames, resize_width, fast_mode = None, 1, 1280, False
+        # Medium res so annotations appear
+        max_frames, skip_frames, resize_width, fast_mode = None, 2, 1280, True
+    else:  # 🎯 High Quality
+        max_frames, skip_frames, resize_width, fast_mode = None, 1, None, False
+
+
 
     # File uploader
     uploaded_file = st.file_uploader(
@@ -185,6 +201,7 @@ def main():
                 uploaded_file, 
                 tracker, 
                 team_assigner,
+                player_ball_assigner=player_ball_assigner,
                 max_frames=max_frames,
                 skip_frames=skip_frames,
                 resize_width=resize_width,
@@ -227,7 +244,7 @@ def main():
         st.write("4. View results including tracked players, team assignments, and ball detection 🏟️")
         
         st.subheader("⚡ Processing Modes:")
-        st.write("- **🚀 Fast**: Quick analysis (~200 frames, reduced quality) - Best for testing")
+        st.write("- **🚀 Fast**: Quick analysis (~250 frames, reduced quality) - Best for testing")
         st.write("- **⚖️ Balanced**: Good balance of speed and quality (~400 frames)")  
         st.write("- **🎯 High Quality**: Full analysis with maximum quality (slower)")
         
